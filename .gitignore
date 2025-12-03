@@ -1,8 +1,34 @@
+# Sistema
+.*
+.cache/
+.local/
+.config/
+.ssh/
+.nv/
+
+# Conda e ambienti virtuali
+miniconda3/
+myenv/
+.conda/
+
+# Python e Jupyter
+__pycache__/
+.ipynb_checkpoints/
+.ipython/
+.jupyter/
+.keras/
+
+# Log e output
+*.log
 *.out
 *.err
-*.log
-__pycache__/
-*.tmp
-data/
-results/
 
+# File di shell personali
+.bash_history
+.bashrc
+.bash_profile
+.bash_logout
+.kshrc
+
+# Tex / editor
+.emacs
