@@ -15,7 +15,7 @@
 cd /home/PERSONALE/nicolo.fiaba/
 
 HOST=$(hostname)
-PORT=9597
+PORT=9595
 
 echo "Job running on node: $HOST"
 

@@ -37,98 +37,92 @@ if gpus:
 BATCH_SIZE = args.batch
 LEARNING_RATE = args.lr
 EPOCHS = args.epochs
-# ---------------------------------------------------------------------------------
-# Check if Grism combination is valid:
-
-
 
 # ---------------------------------------------------------------------------------
 folder_path = "/scratch/astro/nicolo.fiaba/training_sets_EL/"
 
-labels_filename = "labels_" + args.grism + ".fits"
-train_filename = "train_" + args.grism + ".fits"
+def create_training_dataset(folder_path, grism, batch_size, max_threshold=16000, noise_sigma=np.sqrt(800), test_size=0.1, val_size=0.2):
+    labels_filename = "labels_" + grism + ".fits"
+    train_filename = "train_" + grism + ".fits"
 
-labels_path = folder_path + labels_filename
-train_path = folder_path + train_filename
+    labels_path = folder_path + labels_filename
+    train_path = folder_path + train_filename
+    
+    hdu_rect = fits.open(labels_path, memmap=True)
+    hdu_rect_masked = fits.open(train_path, memmap=True)
 
-hdu_rect = fits.open(labels_path, memmap=True)
-hdu_rect_masked = fits.open(train_path, memmap=True)
+    img_data = np.array([hdu.data for hdu in hdu_rect[1:]])
+    img_data_masked = np.array([hdu.data for hdu in hdu_rect_masked[1:]])
 
-img_data = np.array([hdu.data for hdu in hdu_rect[1:]])
-img_data_masked = np.array([hdu.data for hdu in hdu_rect_masked[1:]])
+    # Create the mask object that will be the second channel of the training set
+    mask = np.isnan(img_data_masked).astype(np.float32)
 
-""" Mask object: 
-- 0: Existing pixel
-- 1: Missing pixel
-"""
-mask = np.isnan(img_data_masked).astype(np.float32)
+    # Setting a maximum flux threshold to 16000. All pixels brighter than that are set to 16000
+    img_data = np.clip(img_data, None, max_threshold)
+    img_data_masked = np.clip(img_data_masked, None, max_threshold)
 
-# Setting a maximum flux threshold to 16000. All pixels brighter than that are set to 16000.
-max_threshold = 16000
-img_data[img_data > max_threshold] = max_threshold
-img_data_masked[img_data_masked > max_threshold] = max_threshold
+    # Add noise to the training images
+    size = img_data.shape
 
-# Add noise
-sigma = np.sqrt(800)
-size = (len(img_data), 512, 512)
+    noise = np.random.normal(loc=0, scale=noise_sigma, size=size)
 
-noise = np.random.normal(loc=0, scale=sigma, size=size)
-img_noise = img_data #+ noise
-img_noise = np.array(img_noise, dtype=np.float32)
+    img_noise = img_data.astype(np.float32)
+    img_noise_masked = (img_data_masked + noise).astype(np.float32)
 
-img_noise_masked = img_data_masked + noise
-img_noise_masked = np.array(img_noise_masked, dtype=np.float32)
+    # Rescale to (0,1)
+    x_max = np.nanmax([img_noise, img_noise_masked])
+    x_min = np.nanmin([img_noise, img_noise_masked])
+    rescale = Rescaling(1./(x_max - x_min), offset=-x_min/(x_max - x_min), input_shape=(512, 512, 1))
 
-# This preprocessing layer rescales the images to be in the (0, 1) range
-x_max = np.nanmax(img_noise)
-x_min = np.nanmin(img_noise)
-rescale = Rescaling(1./(x_max - x_min), offset=-x_min/(x_max - x_min), input_shape=(512, 512, 1))
+    img_noise = rescale(img_noise).numpy()
+    img_noise_masked = rescale(img_noise_masked).numpy()
 
-img_noise = rescale(img_noise)
-img_noise_masked = rescale(img_noise_masked)
+    input_imgs = np.stack([img_noise_masked, mask], axis=-1)
 
-# Converting to numpy, otherwise train_test_split function won't work
-img_noise = img_noise.numpy()
-img_noise_masked = img_noise_masked.numpy()
+    # test set is 10% of the whole dataset
+    x_train, x_test, y_train, y_test = train_test_split(
+        input_imgs, img_noise, test_size=test_size, random_state=42)
+    
+    x_train, x_val, y_train, y_val = train_test_split(
+        x_train, y_train, test_size=val_size, random_state=42)
 
-# Input: masked images + mask (2 channels)
-input_imgs = np.stack([img_noise_masked, mask], axis=-1)
+    # Print the number of images in the datasets
+    print("Images in training set:", len(x_train), 
+          "\nImages in validation set:", len(x_val), 
+          "\nImages in test set:", len(x_test), 
+          "\nImage size:", image_size)
+    
+    x_train = tf.convert_to_tensor(x_train, dtype=tf.float32)
+    x_val = tf.convert_to_tensor(x_val, dtype=tf.float32)
+    x_test = tf.convert_to_tensor(x_test, dtype=tf.float32)
+    
+    y_train = tf.convert_to_tensor(y_train, dtype=tf.float32)
+    y_val = tf.convert_to_tensor(y_val, dtype=tf.float32)
+    y_test = tf.convert_to_tensor(y_test, dtype=tf.float32)
+    
+    # Replace NaNs to 0 before feeding the U-Net
+    x_train = tf.where(tf.math.is_nan(x_train), 0., x_train)
+    x_val = tf.where(tf.math.is_nan(x_val), 0., x_val)
+    x_test = tf.where(tf.math.is_nan(x_test), 0., x_test)
+    
+    image_size = (x_train.shape[1], x_train.shape[2])
 
-# test set is 10% of the whole dataset
-x_train, x_test, y_train, y_test = train_test_split(
-    input_imgs, img_noise, test_size=0.1, random_state=42)
+    # Create TensorFlow datasets
+    train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train)).batch(batch_size).shuffle(100)
+    val_dataset = tf.data.Dataset.from_tensor_slices((x_val, y_val)).batch(batch_size)
+    test_dataset = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(batch_size)
 
-x_train, x_val, y_train, y_val = train_test_split(
-    x_train, y_train, test_size=0.2, random_state=42)
+    return train_dataset, val_dataset, test_dataset, image_size
 
-x_train = tf.convert_to_tensor(x_train, dtype=tf.float32)
-x_val = tf.convert_to_tensor(x_val, dtype=tf.float32)
-x_test = tf.convert_to_tensor(x_test, dtype=tf.float32)
+#----------------------------------------------------------- DATASETS CREATION -----------------------------------------------------------------#
 
-y_train = tf.convert_to_tensor(y_train, dtype=tf.float32)
-y_val = tf.convert_to_tensor(y_val, dtype=tf.float32)
-y_test = tf.convert_to_tensor(y_test, dtype=tf.float32)
+# Create the training, validation and test datasets
+train_dataset, val_dataset, test_dataset, image_size = create_training_dataset(
+    folder_path = folder_path,
+    grism = args.grism,
+    batch_size = BATCH_SIZE
+)
 
-# Set NaNs to 0 before feeding the U-Net
-x_train = tf.where(tf.math.is_nan(x_train), 0., x_train)
-x_val = tf.where(tf.math.is_nan(x_val), 0., x_val)
-x_test = tf.where(tf.math.is_nan(x_test), 0., x_test)
-
-image_size = (x_train.shape[1], x_train.shape[2])
-
-print("Images in training set:", len(x_train), 
-      "\nImages in validation set:", len(x_val), 
-      "\nImages in test set:", len(x_test), 
-      "\nImage size:", image_size)
-
-print("\n", tf.reduce_max(x_train))
-print("\n", tf.reduce_min(x_train))
-
-# Creating Tensorflow datasets
-
-train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train)).batch(BATCH_SIZE).shuffle(100)
-val_dataset = tf.data.Dataset.from_tensor_slices((x_val, y_val)).batch(BATCH_SIZE)
-test_dataset = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(BATCH_SIZE)
 #------------------------------------------------------------ LOSS FUNCTIONS -------------------------------------------------------------------#
 
 """
@@ -157,14 +151,23 @@ def downweight_loss(alpha):
         error = K.square(y_true_rescaled - y_pred_rescaled)
         return error
     return loss
-
-def log_downweight_loss(y_true, y_pred):
     
-    y_true_rescaled = tf.math.log(1 + y_true)
-    y_pred_rescaled = tf.math.log(1 + y_pred)
-
-    error = K.square(y_true_rescaled - y_pred_rescaled)
-    return K.mean(error)
+def log_downweight_loss(mode=0)
+    def loss(y_true, y_pred):
+        """
+        mode=0 MSE
+        mode=1 MAE
+        """
+        y_true_rescaled = tf.math.log(1 + y_true)
+        y_pred_rescaled = tf.math.log(1 + y_pred)
+        if mode = 0:
+            error = K.square(y_true_rescaled - y_pred_rescaled)
+        elif mode = 1:
+            error = K.abs(y_true_rescaled - y_pred_rescaled)
+        else:
+            raise ValueError('Mode not valid')
+        return K.mean(error)
+    return loss
 
 def get_gradients(img):
     # img: (batch, H, W, 1)
@@ -285,7 +288,7 @@ lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_schedule)
 
 # Early stop
 early_stop = tf.keras.callbacks.EarlyStopping(monitor='val_loss',
-                                           patience=10,
+                                           patience=20,
                                            restore_best_weights=True,
                                            start_from_epoch=300)
 
@@ -306,7 +309,7 @@ att_unet_model.save(saving_folder + saving_filename)
 
 print("Attention U-Net trained and saved!")
 
-history_filename = "EL_ATT_UNET_hist_" + args.grism
+history_filename = "histories/EL_ATT_UNET_hist_" + args.grism
 import pickle
 with open(saving_folder + history_filename, 'wb') as file_pi:
     pickle.dump(hist.history, file_pi)

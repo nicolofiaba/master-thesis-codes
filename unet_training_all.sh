@@ -27,7 +27,7 @@ conda activate tf
 which python
 python --version
 
-#python codes/att_UNet_rect.py --gpu=1  --lr=1e-4 --batch=16 --epochs=500 --grism="RGS000_0" &> RGS000_0_rect_log.txt &
+python codes/att_UNet.py --gpu=0  --lr=1e-4 --batch=16 --epochs=500 --grism="RGS180_0" &> RGS180_0_log.txt &
 python codes/att_UNet.py --gpu=1  --lr=1e-4 --batch=16 --epochs=500 --grism="RGS000_0" &> RGS000_0_log.txt &
 python codes/att_UNet.py --gpu=2  --lr=1e-4 --batch=16 --epochs=500 --grism="RGS000_minus4" &> RGS000_minus4_log.txt &
 python codes/att_UNet.py --gpu=3  --lr=1e-4 --batch=16 --epochs=500 --grism="RGS180_4" &> RGS180_4_log.txt &
